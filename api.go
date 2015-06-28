@@ -45,15 +45,23 @@ func DbConnection() *sql.DB {
 
 // Try and find the API entry in the DB. Then cache as
 // necessary.
-func FindAPIEntry(id string) (Endpoint, error) {
+func FindEndpoint(id string) (*Endpoint, error) {
+	c := DbConnection()
 
-	// Need to open a db connection...
+	rows := c.QueryRow("SELECT token, device_id, device_type, created_at FROM endpoints where Id == ?", id)
 
-	// Find a record...
+	var token string
+	var deviceId string
+	var deviceType string
+	var createdAt time.Time
 
-	// Load into struct.
+	err := rows.Scan(&token, &deviceId, &deviceType, &createdAt)
 
-	return Endpoint{}, nil
+	if err != nil {
+		return nil, errors.New("Failed to parse endpoint details into variables.")
+	}
+
+	return &Endpoint{Id: id, Token: token, DeviceId: deviceId, DeviceType: deviceType, CreatedAt: createdAt}, nil
 }
 
 func check_device_type(t string) bool {
@@ -83,8 +91,6 @@ func create_id() string {
 
 // Creates a new registration...
 func createEndpoint(device_type string, device_id string) (*Endpoint, error) {
-	c := DbConnection()
-
 	if !check_uuid(device_type) {
 		return nil, errors.New("Invalid Device ID.")
 	}
@@ -93,15 +99,28 @@ func createEndpoint(device_type string, device_id string) (*Endpoint, error) {
 		return nil, errors.New("Invalid Device type.")
 	}
 
+	// Create our own internal values. These are supposed to memorable (ish) so they're shorter than UUIDs.
 	endpoint_id := create_id()
 	endpoint_token := create_id()
 
-	c.QueryRow("INSERT INTO endpoints () VALUES (\"%v\")",
-		device_type,
-		device_id,
-		endpoint_id,
-		endpoint_token,
-		time.Now())
+	c := DbConnection()
+	stmt, err := c.Prepare("INSERT INTO endpoints (id, token, device_id, device_type, created_at) VALUES (?, ?, ?, ?, ?)")
+
+	if err != nil {
+		return nil, errors.New("Failed to create insert statement.")
+	}
+
+	res, err := stmt.Exec(device_type, device_id, endpoint_id, endpoint_token, time.Now())
+
+	if err != nil {
+		return nil, errors.New("Failed to execute insert statement.")
+	}
+
+	row, err := res.RowsAffected()
+
+	if err != nil || row != 1 {
+		return nil, errors.New("Error occured checking database write. A new registration should be attempted.")
+	}
 
 	return &Endpoint{Id: endpoint_id, Token: endpoint_token, DeviceId: device_id, DeviceType: device_type}, nil
 }
