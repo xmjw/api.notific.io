@@ -75,9 +75,8 @@ const charabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 // Generates 8 x alphachar string as a unique ID.
 func create_id() string {
 	var bytes = make([]byte, 8)
-	r := rand.New(rand.NewSource(time.Now().Unix()))
 	for k, _ := range bytes {
-		bytes[k] = charabet[r.Intn(len(charabet))]
+		bytes[k] = charabet[rand.Intn(len(charabet))]
 	}
 	return string(bytes)
 }
@@ -127,18 +126,18 @@ func RecordNotification(user Endpoint, payload string) bool {
 
 // Http handler for creates...
 func CreateTrigger(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Received a POST. Working.")
+	log.Println("Received a POST. Working.")
 }
 
 // Http handler for creates...
 func ShowTriggers(w http.ResponseWriter, r *http.Request) {
 	id := create_id()
-	fmt.Println("Received a GET. Working: %v", id)
+	log.Println("Received a GET. Working: %v", id)
 }
 
 // Http handler for creates...
 func DeleteTrigger(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Received a DELETE. Working.")
+	log.Println("Received a DELETE. Working.")
 }
 
 // If a user has miraculously started getting spam on this endpoint,
@@ -146,7 +145,7 @@ func DeleteTrigger(w http.ResponseWriter, r *http.Request) {
 // Like the read requests, this route requires the device ID, or anyone
 // could reset your token. Which is obviously bad.
 func RecycleToken(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Received a PATCH. Will recycle token if request is valid.")
+	log.Println("Received a PATCH. Will recycle token if request is valid.")
 }
 
 // When a new mobile app is registering itself, we use this.
@@ -188,23 +187,19 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "{ \"id\":\"%v\" \"token\": \"%v\" }", endpoint.Id, endpoint.Token)
 }
 
-func EchoOK(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "OK")
-}
-
 // Core Web stuff for routing.
 func webServer() {
 	log.Println("Building routes to listen on: ", *httpPort)
 
 	r := mux.NewRouter()
 
-	r.HandleFunc("/OK", EchoOK).Methods("GET")
 	r.HandleFunc("/{id}", CreateTrigger).Methods("POST")
 	r.HandleFunc("/{id}", ShowTriggers).Methods("GET")
 	r.HandleFunc("/{id}", DeleteTrigger).Methods("DELETE")
 	r.HandleFunc("/{id}/recycle", RecycleToken).Methods("PATCH")
 	r.HandleFunc("/", RegisterDevice).Methods("POST")
 
+	http.Handle("/", r)
 	http.ListenAndServe(fmt.Sprintf(":%d", 5000), nil)
 }
 
