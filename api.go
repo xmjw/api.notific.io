@@ -36,7 +36,7 @@ type Notification struct {
 // Let database/sql handle the pooling for us. Just be careful
 // to write code that doesn't do locking.
 func DbConnection() *sql.DB {
-	db, err := sql.Open("postgres", *databaseConnectionString)
+	db, err := sql.Open("postgres", *dbConStr)
 	if err != nil {
 		log.Fatal("Failed to open database connection. The server will shut down: %v", err)
 	}
@@ -150,13 +150,12 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 
 // Http handler for creates...
 func ShowTriggers(w http.ResponseWriter, r *http.Request) {
-	id := create_id()
-	log.Println("Received a GET. Working: %v", id)
+	log.Println("Received a GET. Working.")
 }
 
 // Http handler for creates...
 func DeleteTrigger(w http.ResponseWriter, r *http.Request) {
-	log.Println("Received a DELETE. Working.")
+	log.Println("Received a DELETE. Working. ")
 }
 
 // If a user has miraculously started getting spam on this endpoint,
@@ -181,7 +180,7 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	device_type := data.Get("deviceType").MustString()
 	device_id := data.Get("deviceId").MustString()
 
-	log.Print("A new device registration will be created for an '%v'", device_type)
+	log.Print("A new device registration will be created for an '", device_type, "'.")
 
 	endpoint, err := createEndpoint(device_type, device_id)
 
@@ -219,17 +218,18 @@ func webServer() {
 	r.HandleFunc("/", RegisterDevice).Methods("POST")
 
 	http.Handle("/", r)
-	http.ListenAndServe(fmt.Sprintf(":%d", 5000), nil)
+	http.ListenAndServe(fmt.Sprintf(":%v", *httpPort), nil)
 }
 
 var (
-	databaseConnectionString *string = flag.String("database", "", "Postgres Database Connection String")
-	httpPort                 *int    = flag.Int("port", 5000, "HTTP Port to listen on, defaults to 5000")
-	notificToken             *string = flag.String("token", "", "Notific.io token")
-	notificEndpoint          *string = flag.String("endpoint", "", "Notific.io endpoint ID")
-	apnsCert                 *string = flag.String("cert", "", "Apple APNS Certificate")
-	apnsPem                  *string = flag.String("pem", "", "Apple PEM Key")
-	apnsAppId                *string = flag.String("appId", "", "Apple Device/App ID")
+	dbConStr        *string = flag.String("database", "", "Postgres Database Connection String")
+	httpPort        *string = flag.String("port", "5000", "HTTP Port to listen on, defaults to 5000")
+	notificToken    *string = flag.String("token", "", "Notific.io token")
+	notificEndpoint *string = flag.String("endpoint", "", "Notific.io endpoint ID")
+	apnsCert        *string = flag.String("cert", "", "Apple APNS Certificate")
+	apnsPem         *string = flag.String("pem", "", "Apple PEM Key")
+	apnsAppId       *string = flag.String("appId", "", "Apple Device/App ID")
+	apnsEnvironment *string = flag.String("appleEnv", "development", "Apple Environment")
 )
 
 // Entry point.
