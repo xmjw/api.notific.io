@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/bitly/go-simplejson"
 	"github.com/gorilla/mux"
+	_ "github.com/lib/pq"
 	"log"
 	"math/rand"
 	"net/http"
@@ -73,8 +74,10 @@ func check_device_type(t string) bool {
 }
 
 func check_uuid(val string) bool {
-	r := regexp.MustCompile("^[a-z0-9]{8}-[a-z0-9]{4}-[1-5][a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{12}$")
-	return r.MatchString(val)
+	log.Println("Testing UUID: ", val)
+	exp := "^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$"
+	match, _ := regexp.MatchString(exp, val)
+	return match
 }
 
 // 'charabet' an alphabet with all meaningful glyphs, i.e., numbers and letters.
@@ -91,7 +94,7 @@ func create_id() string {
 
 // Creates a new registration...
 func createEndpoint(device_type string, device_id string) (*Endpoint, error) {
-	if !check_uuid(device_type) {
+	if !check_uuid(device_id) {
 		return nil, errors.New("Invalid Device ID.")
 	}
 
@@ -104,23 +107,9 @@ func createEndpoint(device_type string, device_id string) (*Endpoint, error) {
 	endpoint_token := create_id()
 
 	c := DbConnection()
-	stmt, err := c.Prepare("INSERT INTO endpoints (id, token, device_id, device_type, created_at) VALUES (?, ?, ?, ?, ?)")
+	row := c.QueryRow("INSERT INTO endpoints (id, token, device_id, device_type, created_at) VALUES (?, ?, ?, ?, ?)", device_type, device_id, endpoint_id, endpoint_token, time.Now())
 
-	if err != nil {
-		return nil, errors.New("Failed to create insert statement.")
-	}
-
-	res, err := stmt.Exec(device_type, device_id, endpoint_id, endpoint_token, time.Now())
-
-	if err != nil {
-		return nil, errors.New("Failed to execute insert statement.")
-	}
-
-	row, err := res.RowsAffected()
-
-	if err != nil || row != 1 {
-		return nil, errors.New("Error occured checking database write. A new registration should be attempted.")
-	}
+	fmt.Println(row)
 
 	return &Endpoint{Id: endpoint_id, Token: endpoint_token, DeviceId: device_id, DeviceType: device_type}, nil
 }
@@ -173,7 +162,7 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	data, err := simplejson.NewFromReader(r.Body)
 
 	if err != nil {
-		log.Println("Failed to parse incoming JSON: %v", err)
+		log.Println("Failed to parse incoming JSON: ", err)
 		http.Error(w, fmt.Sprintf("{\"error\":\"JSON Parse Failure\",\"details\":\"%v\"}", err), 500)
 	}
 
@@ -185,14 +174,14 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	endpoint, err := createEndpoint(device_type, device_id)
 
 	if err != nil {
-		log.Println("Failed to create a new endpoint: %v", err)
+		log.Println("Failed to create a new endpoint: ", err)
 		http.Error(w, fmt.Sprintf("{\"error\":\"Failed to create a new endpoint.\",\"details\":\"%v\"}", err), 500)
 	}
 
 	// Off in the background we'll report a new user using this software.
 	// How's that for dogfood?
 	go func(device_type string) {
-		log.Println("Using Notific.io to report new registration: %v", err)
+		log.Println("Using Notific.io to report new registration: ", err)
 		_, err := http.Post(fmt.Sprintf("http://api.notific.io/"),
 			"application/json",
 			nil)
