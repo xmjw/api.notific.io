@@ -107,7 +107,13 @@ func createEndpoint(device_type string, device_id string) (*Endpoint, error) {
 	endpoint_token := create_id()
 
 	c := DbConnection()
-	row := c.QueryRow("INSERT INTO endpoints (id, token, device_id, device_type, created_at) VALUES (?, ?, ?, ?, ?)", device_type, device_id, endpoint_id, endpoint_token, time.Now())
+
+	row, err := c.Exec("INSERT INTO endpoints (id, token, device_id, device_type, created_at) VALUES ($1,$2,$3,$4,NOW())", endpoint_id, endpoint_token, device_id, device_type)
+
+	if err != nil {
+		log.Println("Error while trying to inset endpoint: ", err)
+		return &Endpoint{}, err
+	}
 
 	fmt.Println(row)
 
@@ -164,6 +170,7 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println("Failed to parse incoming JSON: ", err)
 		http.Error(w, fmt.Sprintf("{\"error\":\"JSON Parse Failure\",\"details\":\"%v\"}", err), 500)
+		return
 	}
 
 	device_type := data.Get("deviceType").MustString()
@@ -176,12 +183,13 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println("Failed to create a new endpoint: ", err)
 		http.Error(w, fmt.Sprintf("{\"error\":\"Failed to create a new endpoint.\",\"details\":\"%v\"}", err), 500)
+		return
 	}
 
 	// Off in the background we'll report a new user using this software.
 	// How's that for dogfood?
 	go func(device_type string) {
-		log.Println("Using Notific.io to report new registration: ", err)
+		log.Println("Using Notific.io to report new registration: ", device_type)
 		_, err := http.Post(fmt.Sprintf("http://api.notific.io/"),
 			"application/json",
 			nil)
