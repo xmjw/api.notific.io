@@ -44,28 +44,27 @@ func DbConnection() *sql.DB {
 	return db
 }
 
-// Try and find the API entry in the DB. Then cache as
-// necessary.
+// Try and find the API entry in the DB. Then cache as necessary.
 func FindEndpoint(id string) (*Endpoint, error) {
 	c := DbConnection()
+	rows := c.QueryRow("SELECT token, device_id, device_type, created_at FROM endpoints where Id == $1", id)
+	ep := Endpoint{}
 
-	rows := c.QueryRow("SELECT token, device_id, device_type, created_at FROM endpoints where Id == ?", id)
-
-	var token string
-	var deviceId string
-	var deviceType string
-	var createdAt time.Time
-
-	err := rows.Scan(&token, &deviceId, &deviceType, &createdAt)
-
-	if err != nil {
-		return nil, errors.New("Failed to parse endpoint details into variables.")
+	if rows == nil {
+		return nil, errors.New("Failed to query for endpoint. Cannot continue.")
 	}
 
-	return &Endpoint{Id: id, Token: token, DeviceId: deviceId, DeviceType: deviceType, CreatedAt: createdAt}, nil
+	err := rows.Scan(&ep.Token, &ep.DeviceId, &ep.DeviceType, &ep.CreatedAt)
+
+	if err != nil {
+		return nil, errors.New("Failed to parse endpoint details into a struct.")
+	}
+
+	return &ep, nil
 }
 
-func check_device_type(t string) bool {
+// Checks that the device type is either
+func checkDeviceType(t string) bool {
 	if t == "IOS" || t == "ANDROID" || t == "WINDOWS" {
 		return true
 	} else {
@@ -73,10 +72,27 @@ func check_device_type(t string) bool {
 	}
 }
 
-func check_uuid(val string) bool {
+// Checks a typical token 8 x alphachar
+func checkToken(val string) bool {
+	log.Println("Testing Token: ", val)
+	exp := "^[a-zA-Z0-9]{8}$"
+	return checkRegExp(val, exp)
+}
+
+// Tests for a version 4 UUID
+func checkUUID(val string) bool {
 	log.Println("Testing UUID: ", val)
 	exp := "^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$"
-	match, _ := regexp.MatchString(exp, val)
+	return checkRegExp(val, exp)
+}
+
+// Check a string against a regex
+func checkRegExp(val string, exp string) bool {
+	match, err := regexp.MatchString(exp, val)
+	if err != nil {
+		log.Println("Matching RegExp raised an error.")
+		return false
+	}
 	return match
 }
 
@@ -84,7 +100,7 @@ func check_uuid(val string) bool {
 const charabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 // Generates 8 x alphachar string as a unique ID.
-func create_id() string {
+func createId() string {
 	var bytes = make([]byte, 8)
 	for k, _ := range bytes {
 		bytes[k] = charabet[rand.Intn(len(charabet))]
@@ -94,21 +110,26 @@ func create_id() string {
 
 // Creates a new registration...
 func createEndpoint(device_type string, device_id string) (*Endpoint, error) {
-	if !check_uuid(device_id) {
+	if !checkUUID(device_id) {
 		return nil, errors.New("Invalid Device ID.")
 	}
 
-	if !check_device_type(device_type) {
+	if !checkDeviceType(device_type) {
 		return nil, errors.New("Invalid Device type.")
 	}
 
 	// Create our own internal values. These are supposed to memorable (ish) so they're shorter than UUIDs.
-	endpoint_id := create_id()
-	endpoint_token := create_id()
+	endpoint_id := createId()
+	endpoint_token := createId()
 
 	c := DbConnection()
 
-	row, err := c.Exec("INSERT INTO endpoints (id, token, device_id, device_type, created_at) VALUES ($1,$2,$3,$4,NOW())", endpoint_id, endpoint_token, device_id, device_type)
+	row, err := c.Exec(
+		"INSERT INTO endpoints (id, token, device_id, device_type, created_at) VALUES ($1,$2,$3,$4,NOW())",
+		endpoint_id,
+		endpoint_token,
+		device_id,
+		device_type)
 
 	if err != nil {
 		log.Println("Error while trying to inset endpoint: ", err)
@@ -141,6 +162,22 @@ func RecordNotification(user Endpoint, payload string) bool {
 // Http handler for creates...
 func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received a POST. Working.")
+
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	// We use the same error every time, as this makes it harder to try and hack from the outside with
+	// brute force attempt to get the message. Timing attacks are still an issue however.
+	fof := fmt.Sprintf("{\"error\":\"Invalid endpoint/token.\",\"details\":\"Could not find requested endpoint. Please check your configuration.\"}")
+
+	if !checkToken(id) {
+		log.Println("Invalid endpoint/token: ", token)
+		http.Error(w, fof, 404)
+		return
+	}
+
+	endpoint, err = findEndpoint(id)
+
 }
 
 // Http handler for creates...
@@ -159,6 +196,7 @@ func DeleteTrigger(w http.ResponseWriter, r *http.Request) {
 // could reset your token. Which is obviously bad.
 func RecycleToken(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received a PATCH. Will recycle token if request is valid.")
+
 }
 
 // When a new mobile app is registering itself, we use this.
