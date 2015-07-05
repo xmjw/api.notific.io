@@ -44,10 +44,10 @@ func DbConnection() *sql.DB {
 	return db
 }
 
-// Try and find the API entry in the DB. Then cache as necessary.
-func FindEndpoint(id string) (*Endpoint, error) {
-	c := DbConnection()
-	rows := c.QueryRow("SELECT token, device_id, device_type, created_at FROM endpoints where Id == $1", id)
+// Try and find the API entry in the DB. Then cache as necessary.Ffunc FindEndpoint(id string) (*Endpoint, error) {
+func findEndpoint(id string) (*Endpoint, error) {
+	conn := DbConnection()
+	rows := conn.QueryRow("SELECT token, device_id, device_type, created_at FROM endpoints where id = $1", id)
 	ep := Endpoint{}
 
 	if rows == nil {
@@ -57,7 +57,7 @@ func FindEndpoint(id string) (*Endpoint, error) {
 	err := rows.Scan(&ep.Token, &ep.DeviceId, &ep.DeviceType, &ep.CreatedAt)
 
 	if err != nil {
-		return nil, errors.New("Failed to parse endpoint details into a struct.")
+		return nil, errors.New(fmt.Sprintf("Failed to parse endpoint details into a struct: %v ", err))
 	}
 
 	return &ep, nil
@@ -159,6 +159,7 @@ func RecordNotification(user Endpoint, payload string) bool {
 	return false
 }
 
+// RFbD56TI | 2smTyVsG
 // Http handler for creates...
 func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received a POST. Working.")
@@ -171,13 +172,66 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 	fof := fmt.Sprintf("{\"error\":\"Invalid endpoint/token.\",\"details\":\"Could not find requested endpoint. Please check your configuration.\"}")
 
 	if !checkToken(id) {
-		log.Println("Invalid endpoint/token: ", token)
+		log.Println("Invalid endpoint: ", id)
 		http.Error(w, fof, 404)
 		return
 	}
 
-	endpoint, err = findEndpoint(id)
+	endpoint, err := findEndpoint(id)
 
+	if err != nil {
+		log.Println("Problem finding endpoint in database: ", err)
+		http.Error(w, fof, 404)
+		return
+	}
+
+	// Load the JSON.
+	payload, err := simplejson.NewFromReader(r.Body)
+
+	if err != nil {
+		log.Println("Failed to parse request JSON: ")
+		http.Error(w, fmt.Sprintf("{\"error\":\"Request body invalid.\",\"details\":\"%v\"}", err), 400)
+		return
+	}
+
+	token := payload.Get("token").MustString()
+	message := payload.Get("message").MustString()
+	action := payload.Get("action").MustString()
+
+	if !checkToken(token) {
+		log.Println("Invalid token: ", token)
+		http.Error(w, fof, 404)
+		return
+	}
+
+	// Now check against the JSON
+	log.Println("Valid alert: ", token, message, action)
+
+	if token != endpoint.Token {
+		log.Println("Endpoint token did not match DB stored token: ", token, vars["token"])
+		http.Error(w, fof, 404)
+		return
+	}
+
+	// Store the alert, although we need to check the JSON or SQL injection...
+
+	// Identify the service we'll use to deliver the message
+	serviceId := "UNKNOWN"
+	if endpoint.DeviceType == "IOS" {
+		serviceId = "Apple Push Notification Service"
+	} else if endpoint.DeviceType == "ANDROID" {
+		serviceId = "Not implemented!"
+	} else if endpoint.DeviceType == "WINDOWS" {
+		serviceId = "Not implemented!"
+	} else {
+		log.Println("Failed to find a device service match: ", endpoint.DeviceType)
+		http.Error(w, "{\"error\":\"Could not identify device type.\",\"details\":\"Device type did not match a configured type.\"}", 400)
+		return
+	}
+
+	// 200 OK!
+
+	fmt.Fprintf(w, "{ \"status\":\"OK\" \"details\": \"Message has been sent to %v.\" }", serviceId)
 }
 
 // Http handler for creates...
