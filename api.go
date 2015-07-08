@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -59,6 +60,10 @@ func findEndpoint(id string) (*Endpoint, error) {
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Failed to parse endpoint details into a struct: %v ", err))
 	}
+
+	// PG can mysteriously load ' IOS      ' despite 'IOS' being in the DB. Fix properly later, something else
+	// fishy is probably happening.
+	ep.DeviceType = strings.TrimSpace(ep.DeviceType)
 
 	return &ep, nil
 }
@@ -109,27 +114,27 @@ func createId() string {
 }
 
 // Creates a new registration...
-func createEndpoint(device_type string, device_id string) (*Endpoint, error) {
-	if !checkUUID(device_id) {
+func createEndpoint(deviceType string, deviceId string) (*Endpoint, error) {
+	if !checkUUID(deviceId) {
 		return nil, errors.New("Invalid Device ID.")
 	}
 
-	if !checkDeviceType(device_type) {
+	if !checkDeviceType(deviceType) {
 		return nil, errors.New("Invalid Device type.")
 	}
 
 	// Create our own internal values. These are supposed to memorable (ish) so they're shorter than UUIDs.
-	endpoint_id := createId()
-	endpoint_token := createId()
+	endpointId := createId()
+	endpointToken := createId()
 
 	c := DbConnection()
 
 	row, err := c.Exec(
 		"INSERT INTO endpoints (id, token, device_id, device_type, created_at) VALUES ($1,$2,$3,$4,NOW())",
-		endpoint_id,
-		endpoint_token,
-		device_id,
-		device_type)
+		endpointId,
+		endpointToken,
+		deviceId,
+		deviceType)
 
 	if err != nil {
 		log.Println("Error while trying to inset endpoint: ", err)
@@ -138,20 +143,23 @@ func createEndpoint(device_type string, device_id string) (*Endpoint, error) {
 
 	fmt.Println(row)
 
-	return &Endpoint{Id: endpoint_id, Token: endpoint_token, DeviceId: device_id, DeviceType: device_type}, nil
+	return &Endpoint{Id: endpointId,
+		Token:      endpointToken,
+		DeviceId:   deviceId,
+		DeviceType: deviceType}, nil
 }
 
 // Enhanced security, this is the user we think it is, using the app we think
 // they're using. So we let them see old notifications, and allow recycling etc.
-func AuthenticateRequest(device string, token string, user Endpoint) bool {
-	return false
+func authenticateRequest(device string, token string, endpoint *Endpoint) bool {
+	return device == endpoint.DeviceId && validateRequest(token, endpoint)
 }
 
 // This checks the user's API token against that in the DB.
 // It means that we can trigger the endpoint. NOT that we can do anything else.
 // For administration of this endpoint, see AuthenticateRequest().
-func ValidateRequest(token string, user Endpoint) bool {
-	return user.Token == token
+func validateRequest(token string, endpoint *Endpoint) bool {
+	return endpoint.Token == token
 }
 
 // Store the request in the DB, and send to APNS
@@ -173,7 +181,7 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 
 	if !checkToken(id) {
 		log.Println("Invalid endpoint: ", id)
-		http.Error(w, fof, 404)
+		http.Error(w, fof, 401)
 		return
 	}
 
@@ -181,7 +189,7 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		log.Println("Problem finding endpoint in database: ", err)
-		http.Error(w, fof, 404)
+		http.Error(w, fof, 401)
 		return
 	}
 
@@ -200,8 +208,13 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 
 	if !checkToken(token) {
 		log.Println("Invalid token: ", token)
-		http.Error(w, fof, 404)
+		http.Error(w, fof, 401)
 		return
+	}
+
+	if validateRequest(token, endpoint) == false {
+		log.Println("Token was not valid against the endpoint: ", token)
+		http.Error(w, fof, 401)
 	}
 
 	// Now check against the JSON
@@ -224,7 +237,7 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 	} else if endpoint.DeviceType == "WINDOWS" {
 		serviceId = "Not implemented!"
 	} else {
-		log.Println("Failed to find a device service match: ", endpoint.DeviceType)
+		log.Println("Failed to find a device service match: '", endpoint.DeviceType, "'")
 		http.Error(w, "{\"error\":\"Could not identify device type.\",\"details\":\"Device type did not match a configured type.\"}", 400)
 		return
 	}
