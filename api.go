@@ -106,9 +106,10 @@ const charabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 
 // Generates 8 x alphachar string as a unique ID.
 func createId() string {
+  r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	var bytes = make([]byte, 8)
 	for k, _ := range bytes {
-		bytes[k] = charabet[rand.Intn(len(charabet))]
+		bytes[k] = charabet[r.Intn(len(charabet))]
 	}
 	return string(bytes)
 }
