@@ -87,7 +87,7 @@ func checkToken(val string) bool {
 // Tests for a version 4 UUID
 func checkUUID(val string) bool {
 	log.Println("Testing UUID: ", val)
-	exp := "^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$"
+	exp := "^[a-zA-Z0-9]{8}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{12}$"
 	return checkRegExp(val, exp)
 }
 
@@ -243,7 +243,7 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 200 OK!
-
+	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintf(w, "{ \"status\":\"OK\" \"details\": \"Message has been sent to %v.\" }", serviceId)
 }
 
@@ -304,6 +304,8 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 		}
 	}(device_type)
 
+	// 201 OK (but a little bit more)
+	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintf(w, "{ \"id\":\"%v\" \"token\": \"%v\" }", endpoint.Id, endpoint.Token)
 }
 
