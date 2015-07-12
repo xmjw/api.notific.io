@@ -307,7 +307,7 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 
 	// 201 OK (but a little bit more)
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "{ \"id\":\"%v\" \"token\": \"%v\" }", endpoint.Id, endpoint.Token)
+	fmt.Fprintf(w, "{ \"endpoint\":\"%v\", \"token\": \"%v\" }", endpoint.Id, endpoint.Token)
 }
 
 // Core Web stuff for routing.
