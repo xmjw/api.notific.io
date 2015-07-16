@@ -18,11 +18,12 @@ import (
 
 // The Endpoint (which later can be grouped on users etc)
 type Endpoint struct {
-	Id         string
-	Token      string
-	DeviceId   string
-	CreatedAt  time.Time
-	DeviceType string
+	Id          string
+	Token       string
+	DeviceId    string
+	CreatedAt   time.Time
+	DeviceType  string
+	DeviceToken string
 }
 
 // Each notifcation that we send.
@@ -48,14 +49,14 @@ func DbConnection() *sql.DB {
 // Try and find the API entry in the DB. Then cache as necessary.Ffunc FindEndpoint(id string) (*Endpoint, error) {
 func findEndpoint(id string) (*Endpoint, error) {
 	conn := DbConnection()
-	rows := conn.QueryRow("SELECT token, device_id, device_type, created_at FROM endpoints where id = $1", id)
+	rows := conn.QueryRow("SELECT token, device_id, device_type, device_token, created_at FROM endpoints where id = $1", id)
 	ep := Endpoint{}
 
 	if rows == nil {
 		return nil, errors.New("Failed to query for endpoint. Cannot continue.")
 	}
 
-	err := rows.Scan(&ep.Token, &ep.DeviceId, &ep.DeviceType, &ep.CreatedAt)
+	err := rows.Scan(&ep.Token, &ep.DeviceId, &ep.DeviceType, &ep.DeviceToken, &ep.CreatedAt)
 
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Failed to parse endpoint details into a struct: %v ", err))
@@ -84,6 +85,12 @@ func checkToken(val string) bool {
 	return checkRegExp(val, exp)
 }
 
+func checkIOSToken(val string) bool {
+	log.Println("Testing UUID: ", val)
+	exp := "^[a-zA-Z0-9]{64}$"
+	return checkRegExp(val, exp)
+}
+
 // Tests for a version 4 UUID
 func checkUUID(val string) bool {
 	log.Println("Testing UUID: ", val)
@@ -106,7 +113,7 @@ const charabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 
 // Generates 8 x alphachar string as a unique ID.
 func createId() string {
-  r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	var bytes = make([]byte, 8)
 	for k, _ := range bytes {
 		bytes[k] = charabet[r.Intn(len(charabet))]
@@ -115,13 +122,18 @@ func createId() string {
 }
 
 // Creates a new registration...
-func createEndpoint(deviceType string, deviceId string) (*Endpoint, error) {
+func createEndpoint(deviceType string, deviceId string, deviceToken string) (*Endpoint, error) {
 	if !checkUUID(deviceId) {
 		return nil, errors.New("Invalid Device ID.")
 	}
 
 	if !checkDeviceType(deviceType) {
 		return nil, errors.New("Invalid Device type.")
+	}
+
+	// Enforce IOS device type at the moment, as no other companion app is available.
+	if !checkIOSToken(deviceToken) {
+		return nil, errors.New("Invalid Device Token (IOS)")
 	}
 
 	// Create our own internal values. These are supposed to memorable (ish) so they're shorter than UUIDs.
@@ -131,11 +143,12 @@ func createEndpoint(deviceType string, deviceId string) (*Endpoint, error) {
 	c := DbConnection()
 
 	row, err := c.Exec(
-		"INSERT INTO endpoints (id, token, device_id, device_type, created_at) VALUES ($1,$2,$3,$4,NOW())",
+		"INSERT INTO endpoints (id, token, device_id, device_type, device_token, created_at) VALUES ($1,$2,$3,$4,$5,NOW())",
 		endpointId,
 		endpointToken,
 		deviceId,
-		deviceType)
+		deviceType,
+		deviceToken)
 
 	if err != nil {
 		log.Println("Error while trying to inset endpoint: ", err)
@@ -145,9 +158,10 @@ func createEndpoint(deviceType string, deviceId string) (*Endpoint, error) {
 	fmt.Println(row)
 
 	return &Endpoint{Id: endpointId,
-		Token:      endpointToken,
-		DeviceId:   deviceId,
-		DeviceType: deviceType}, nil
+		Token:       endpointToken,
+		DeviceId:    deviceId,
+		DeviceType:  deviceType,
+		DeviceToken: deviceToken}, nil
 }
 
 // Enhanced security, this is the user we think it is, using the app we think
@@ -281,10 +295,11 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 
 	device_type := data.Get("deviceType").MustString()
 	device_id := data.Get("deviceId").MustString()
+	device_token := data.Get("deviceToken").MustString()
 
 	log.Print("A new device registration will be created for an '", device_type, "'.")
 
-	endpoint, err := createEndpoint(device_type, device_id)
+	endpoint, err := createEndpoint(device_type, device_id, device_token)
 
 	if err != nil {
 		log.Println("Failed to create a new endpoint: ", err)
