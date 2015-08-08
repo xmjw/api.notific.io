@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/anachronistic/apns"
 	"github.com/bitly/go-simplejson"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
@@ -185,7 +186,7 @@ func RecordNotification(user Endpoint, payload string) bool {
 // RFbD56TI | 2smTyVsG
 // Http handler for creates...
 func CreateTrigger(w http.ResponseWriter, r *http.Request) {
-	log.Println("Received a POST. Working.")
+	log.Println("Received a POST against an ID. Working.")
 
 	vars := mux.Vars(r)
 	id := vars["id"]
@@ -283,7 +284,7 @@ func RecycleToken(w http.ResponseWriter, r *http.Request) {
 
 // When a new mobile app is registering itself, we use this.
 func RegisterDevice(w http.ResponseWriter, r *http.Request) {
-	log.Println("Registering a new Device!")
+	log.Println("Received a POST. Registering a new Device!")
 
 	data, err := simplejson.NewFromReader(r.Body)
 
