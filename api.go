@@ -183,7 +183,29 @@ func RecordNotification(user Endpoint, payload string) bool {
 	return false
 }
 
-// RFbD56TI | 2smTyVsG
+// Generate an APNS message and send it to apple!
+func SendNotification(endpoint *Endpoint, message string) {
+	log.Println("Sending a message to APNS for endpoint ", endpoint.Id)
+
+	payload := apns.NewPayload()
+	payload.Alert = message
+	payload.Badge = 1
+	payload.Sound = "bingbong.aiff"
+
+	pn := apns.NewPushNotification()
+	pn.DeviceToken = endpoint.DeviceToken
+	pn.AddPayload(payload)
+
+	client := apns.NewClient("gateway.sandbox.push.apple.com:2195", "apns-dev-cert.pem", "apns-dev-key-noenc.pem")
+	resp := client.Send(pn)
+
+	alert, _ := pn.PayloadString()
+	log.Println("  Alert:", alert)
+	log.Println("Success:", resp.Success)
+	log.Println("  Error:", resp.Error)
+
+}
+
 // Http handler for creates...
 func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 	log.Println("Received a POST against an ID. Working.")
@@ -243,11 +265,13 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store the alert, although we need to check the JSON or SQL injection...
+	// BASE64 Encode the message!!! Solves the problem, but recoverable.
 
 	// Identify the service we'll use to deliver the message
 	serviceId := "UNKNOWN"
 	if endpoint.DeviceType == "IOS" {
 		serviceId = "Apple Push Notification Service"
+		SendNotification(endpoint, message)
 	} else if endpoint.DeviceType == "ANDROID" {
 		serviceId = "Not implemented!"
 	} else if endpoint.DeviceType == "WINDOWS" {

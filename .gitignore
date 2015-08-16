@@ -3,6 +3,7 @@
 *.a
 *.so
 *.swp
+*.pem
 # Folders
 _obj
 _test
