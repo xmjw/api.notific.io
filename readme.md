@@ -35,7 +35,7 @@ If you do provide one, the mobile app will open the  So a little over 900 bytes 
 
 For example, you could triger this event using some ruby like so:
 
-    HTTParty.post("https://api.notific.io/b2b2b2b2", { body: { token: "a1a2a3a4", message: "Wow!", sent: Time.now } }
+    HTTParty.post("https://api.notific.io/b2b2b2b2", { body: { token: "a1a2a3a4", message: "Wow!" } }
 
 Other examples will be added as I can be bothered.
 
