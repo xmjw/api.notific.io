@@ -110,7 +110,7 @@ func checkRegExp(val string, exp string) bool {
 }
 
 // 'charabet' an alphabet with all meaningful glyphs, i.e., numbers and letters.
-const charabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+const charabet = "023456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnopqrstuvwxyz"
 
 // Generates 8 x alphachar string as a unique ID.
 func createId() string {
@@ -200,9 +200,9 @@ func SendNotification(endpoint *Endpoint, message string) {
 	resp := client.Send(pn)
 
 	alert, _ := pn.PayloadString()
-	log.Println("  Alert:", alert)
-	log.Println("Success:", resp.Success)
-	log.Println("  Error:", resp.Error)
+	log.Println("APNS: Alert:", alert)
+	log.Println("APNS: Success:", resp.Success)
+	log.Println("APNS: Error:", resp.Error)
 
 }
 
@@ -271,7 +271,10 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 	serviceId := "UNKNOWN"
 	if endpoint.DeviceType == "IOS" {
 		serviceId = "Apple Push Notification Service"
+
+		// This should be a GO Func.
 		SendNotification(endpoint, message)
+
 	} else if endpoint.DeviceType == "ANDROID" {
 		serviceId = "Not implemented!"
 	} else if endpoint.DeviceType == "WINDOWS" {
