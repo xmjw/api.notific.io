@@ -4,6 +4,7 @@ import (
 	"code.google.com/p/go-uuid/uuid"
 	"database/sql"
 	"encoding/base64"
+	gojson "encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -58,14 +60,14 @@ func DbConnection() *sql.DB {
 // Try and find the API entry in the DB. Then cache as necessary.Ffunc FindEndpoint(id string) (*Endpoint, error) {
 func findEndpoint(id string) (*Endpoint, error) {
 	conn := DbConnection()
-	rows := conn.QueryRow("SELECT token, device_id, device_type, device_token, created_at FROM endpoints where id = $1", id)
+	rows := conn.QueryRow("SELECT id, token, device_id, device_type, device_token, created_at FROM endpoints where id = $1", id)
 	ep := Endpoint{}
 
 	if rows == nil {
 		return nil, errors.New("Failed to query for endpoint. Cannot continue.")
 	}
 
-	err := rows.Scan(&ep.Token, &ep.DeviceId, &ep.DeviceType, &ep.DeviceToken, &ep.CreatedAt)
+	err := rows.Scan(&ep.Id, &ep.Token, &ep.DeviceId, &ep.DeviceType, &ep.DeviceToken, &ep.CreatedAt)
 
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Failed to parse endpoint details into a struct: %v ", err))
@@ -81,7 +83,7 @@ func findEndpoint(id string) (*Endpoint, error) {
 // load a notification from the database. Hopefully.
 func findNotification(id string) (*Notification, error) {
 	conn := DbConnection()
-	rows := conn.QueryRow("SELECT id, endpoint_id, payload, status, enc, created_at FROM endpoints where id = $1", id)
+	rows := conn.QueryRow("SELECT id, endpoint_id, payload, status, encrypted, created_at FROM notifications where id = $1", id)
 	notif := Notification{}
 
 	if rows == nil {
@@ -98,16 +100,62 @@ func findNotification(id string) (*Notification, error) {
 	return &notif, nil
 }
 
+func findNotificationsForEndpoint(endpoint *Endpoint, offset int, limit int) (*[]Notification, error) {
+	conn := DbConnection()
+	rows, err := conn.Query("SELECT id, endpoint_id, payload, status, encrypted, created_at FROM notifications where endpoint_id = $1 ORDER BY created_at LIMIT $2 OFFSET $3", 
+		endpoint.Id,
+		limit,
+		offset)
+
+	if err != nil {
+		log.Println("Failed querying for notifications: ",err)
+		return nil, errors.New("Failed to query for notification. Cannot continue.")
+	}
+	
+	// We're expecting users to behave in a 'few unread messages' way, so optimise for small numbers by default
+	notifications := make( []Notification, limit, limit)
+	log.Println("Notification array is ",len(notifications), " segments long (",limit,").")
+
+	if rows == nil {
+		log.Println("Failed querying for notifications, no error but `rows` was nil. :-(")
+		return nil, errors.New("Failed to query for notification. Cannot continue.")
+	}
+
+  i := 0
+	defer rows.Close()
+  for rows.Next() {
+	  notif := Notification{}
+	  err := rows.Scan(&notif.Id, &notif.EndpointId, &notif.Payload, &notif.Status, &notif.Enc, &notif.CreatedAt)
+	  
+	  if err != nil {
+	  	log.Println("Attempting to load one of the notifications errored: ", err)
+	  	return nil, err
+	  } else {
+		  notifications[i] = notif
+		}
+		i++
+  }
+
+	if err != nil {
+		log.Println("Failed to load a notification: ", err)
+		return nil, errors.New(fmt.Sprintf("Failed to parse endpoint details into a struct: %v ", err))
+	}
+
+	return &notifications, nil
+}
+
 func updateNotification(notification *Notification, status string) {
 	c := DbConnection()
 	_, err := c.Exec(
-		"UPDATE notifications SET (status = $1) WHERE id = $2",
+		"UPDATE notifications SET status = $1 WHERE id = $2",
 		status,
 		notification.Id)
 
 	if err != nil {
 		log.Println("Error while trying to update a Notification record (", notification.Id, "): ", err)
 	}
+	
+	log.Println("Notification (", notification.Id, ") has been updated with status: ", status)
 }
 
 // Checks that the device type is either
@@ -126,14 +174,14 @@ func checkToken(val string) bool {
 	return checkRegExp(val, exp)
 }
 
-func checkUuidToken(val string) bool {
+func checkIOSToken(val string) bool {
 	log.Println("Testing UUID: ", val)
 	exp := "^[a-zA-Z0-9]{64}$"
 	return checkRegExp(val, exp)
 }
 
 // Tests for a version 4 UUID
-func checkUUID(val string) bool {
+func checkUuid(val string) bool {
 	log.Println("Testing UUID: ", val)
 	exp := "^[a-zA-Z0-9]{8}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{12}$"
 	return checkRegExp(val, exp)
@@ -176,8 +224,10 @@ func createNotification(endpoint *Endpoint, message string, encrypted bool) (*No
 
 	id := createUuid()
 
+	log.Println("EndpontId: ", endpoint.Id)
+
 	_, err := c.Exec(
-		"INSERT INTO notifications (id, endpoint_id, payload, status, enc, created_at) VALUES ($1,$2,$3,$4,$5,NOW())",
+		"INSERT INTO notifications (id, endpoint_id, payload, status, encrypted, created_at) VALUES ($1,$2,$3,$4,$5,NOW())",
 		id,
 		endpoint.Id,
 		message64,
@@ -194,7 +244,7 @@ func createNotification(endpoint *Endpoint, message string, encrypted bool) (*No
 
 // Creates a new registration...
 func createEndpoint(deviceType string, deviceId string, deviceToken string) (*Endpoint, error) {
-	if !checkUUID(deviceId) {
+	if !checkUuid(deviceId) {
 		return nil, errors.New("Invalid Device ID.")
 	}
 
@@ -203,7 +253,7 @@ func createEndpoint(deviceType string, deviceId string, deviceToken string) (*En
 	}
 
 	// Enforce IOS device type at the moment, as no other companion app is available.
-	if !checkUuidToken(deviceToken) {
+	if !checkIOSToken(deviceToken) {
 		return nil, errors.New("Invalid Device Token (IOS)")
 	}
 
@@ -267,8 +317,9 @@ func RecordNotification(user Endpoint, payload string) bool {
 	return false
 }
 
+// NO RETURN, expected to be run as a gofunc.
 // Generate an APNS message and send it to apple!
-func SendNotification(endpoint *Endpoint, notification *Notification) {
+func SendIOSNotification(endpoint *Endpoint, notification *Notification) {
 	log.Println("Sending a message to APNS for endpoint ", endpoint.Id)
 
   message, err := decodeMessage(notification.Payload)
@@ -290,18 +341,17 @@ func SendNotification(endpoint *Endpoint, notification *Notification) {
 
 	client := apns.NewClient("gateway.sandbox.push.apple.com:2195", "apns-dev-cert.pem", "apns-dev-key-noenc.pem")
 	resp := client.Send(pn)
-
 	alert, _ := pn.PayloadString()
 
-	status := QUEUED
+	status := REJECTED
 
-  if resp.Success {
-  	log.Println(notification.Id, " send OK.")
-  	status = SENT
-	} else {
-	  log.Println(notification.Id, " failed: ", alert, ", ", resp.Error)
-	  status = ERROR
-	}
+ if resp.Success {
+ 	log.Println(notification.Id, " send OK.")
+ 	status = SENT
+} else {
+  log.Println(notification.Id, " failed: ", alert, ", ", resp.Error)
+  status = ERROR
+}
 
   updateNotification(notification, status)
 }
@@ -313,8 +363,8 @@ func CheckNotification(w http.ResponseWriter, r *http.Request) {
 	id := vars["id"]
 	fof := fmt.Sprintf("{\"error\":\"Invalid notification.\",\"details\":\"Could not find requested notification.\"}")
 
-	if !checkUuidToken(id) {
-		log.Println("Invalid endpoint: ", id)
+	if !checkUuid(id) {
+		log.Println("Invalid notification ID: ", id)
 		http.Error(w, fof, 401)
 		return		
 	}
@@ -322,7 +372,7 @@ func CheckNotification(w http.ResponseWriter, r *http.Request) {
 	notif, err := findNotification(id)
 
 	if err != nil {
-		log.Println("Notification could not be found: ", id)
+		log.Println("Notification (",id,") could not be found: ", err)
 		http.Error(w, fof, 404)
 		return
 	}
@@ -341,7 +391,7 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 
 	// We use the same error every time, as this makes it harder to try and hack from the outside with
 	// brute force attempt to get the message. Timing attacks are still an issue however.
-	fof := fmt.Sprintf("{\"error\":\"Invalid endpoint/token.\",\"details\":\"Could not find requested endpoint. Please check your configuration.\"}")
+	fof := fmt.Sprintf("{\"error\":\"Invalid endpoint/token.\",\"details\":\"Could not find requested endpoint.\"}")
 
 	if !checkToken(id) {
 		log.Println("Invalid endpoint: ", id)
@@ -403,7 +453,7 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 		// This should be a GO Func.
 		go func(endpoint *Endpoint, notif *Notification) { 
 			log.Println("Sending Notification to Apple: ", notif.Id)
-			SendNotification(endpoint, notif)
+			SendIOSNotification(endpoint, notif)
 		}(endpoint, notif)
 	// } else if endpoint.DeviceType == "ANDROID" {
 	// 	serviceId = "Not implemented!"
@@ -421,8 +471,70 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 }
 
 // Http handler for creates...
-func ShowTriggers(w http.ResponseWriter, r *http.Request) {
-	log.Println("Received a GET. Working.")
+func NotificationsForEndpoint(w http.ResponseWriter, r *http.Request) {
+	log.Println("Received a GET. Listing notifications...")
+
+	vars := mux.Vars(r)
+	id := vars["id"]
+	token := vars["token"]
+	offsetStr := vars["offset"]
+
+	offset := 0
+  limit := 5
+
+	if offsetStr != "" {
+    offsetInt, err := strconv.ParseInt(offsetStr, 10, 32)
+    if err != nil {
+			log.Println("Could not convert the offset (", offsetStr, ") to an integer. ", err)
+			http.Error(w, fmt.Sprintf("{\"error\":\"Invalid Offset\",\"details\":\"%v\"}", err), 400)
+			return
+    }
+    offset = int(offsetInt)
+  }
+
+	fof := fmt.Sprintf("{\"error\":\"Invalid endpoint/token.\",\"details\":\"Could not find requested endpoint.\"}")
+
+	if !checkToken(id) {
+		log.Println("Invalid ID: ", id)
+		http.Error(w, fof, 401)
+		return
+	}
+
+	if !checkToken(token) {
+		log.Println("Invalid token: ", token)
+		http.Error(w, fof, 401)
+		return
+	}
+
+	endpoint, err := findEndpoint(id)
+
+	if err != nil {
+		log.Println("Failed to find endpoint: ", id)
+		http.Error(w, fof, 404)
+	}
+
+	if validateRequest(token, endpoint) == false {
+		log.Println("Token was not valid against the endpoint: ", token)
+		http.Error(w, fof, 401)
+	}
+
+  notifications, err := findNotificationsForEndpoint(endpoint, offset, limit)
+
+	if err != nil {
+		log.Println("Failed to find notifications: ", id)
+		http.Error(w, fof, 404)
+	}
+
+  log.Println(len(*notifications), " notifications were found! Yahoo.")
+
+	// render notifications in JSON, needs something more substantial than previous.
+  jsonStr, err := gojson.Marshal(notifications)
+  if err != nil {
+		log.Println("Failed to render JSON: ", err)
+		http.Error(w, fof, 400)
+  }
+
+  fmt.Fprintln(w,string(jsonStr))
 }
 
 // Http handler for creates...
@@ -489,7 +601,7 @@ func webServer() {
 	r := mux.NewRouter()
   r.HandleFunc("/notification/{id}", CheckNotification).Methods("GET")
 	r.HandleFunc("/{id}", CreateTrigger).Methods("POST")
-	r.HandleFunc("/{id}", ShowTriggers).Methods("GET")
+	r.HandleFunc("/{id}/{token}", NotificationsForEndpoint).Methods("GET")
 	r.HandleFunc("/{id}", DeleteTrigger).Methods("DELETE")
 	r.HandleFunc("/{id}/recycle", RecycleToken).Methods("PATCH")
 	r.HandleFunc("/", RegisterDevice).Methods("POST")
