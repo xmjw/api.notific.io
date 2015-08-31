@@ -1,7 +1,9 @@
 package main
 
 import (
+	"code.google.com/p/go-uuid/uuid"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,12 +31,18 @@ type Endpoint struct {
 
 // Each notifcation that we send.
 type Notification struct {
-	Id        string
-	UserId    string
-	Payload   string
-	Status    string
-	CreatedAt time.Time
+	Id         string
+	EndpointId string
+	Payload    string
+	Status     string
+	Enc        bool
+	CreatedAt  time.Time
 }
+
+const QUEUED string = "QUEUED"
+const SENT string = "SENT"
+const ERROR string = "ERROR"
+const REJECTED string = "REJECTED"
 
 // Get our connection string and handle any issues.
 // Let database/sql handle the pooling for us. Just be careful
@@ -70,6 +78,38 @@ func findEndpoint(id string) (*Endpoint, error) {
 	return &ep, nil
 }
 
+// load a notification from the database. Hopefully.
+func findNotification(id string) (*Notification, error) {
+	conn := DbConnection()
+	rows := conn.QueryRow("SELECT id, endpoint_id, payload, status, enc, created_at FROM endpoints where id = $1", id)
+	notif := Notification{}
+
+	if rows == nil {
+		return nil, errors.New("Failed to query for notification. Cannot continue.")
+	}
+
+	err := rows.Scan(&notif.Id, &notif.EndpointId, &notif.Payload, &notif.Status, &notif.Enc, &notif.CreatedAt)
+
+	if err != nil {
+		log.Println("Failed to load a notification: ", err)
+		return nil, errors.New(fmt.Sprintf("Failed to parse endpoint details into a struct: %v ", err))
+	}
+
+	return &notif, nil
+}
+
+func updateNotification(notification *Notification, status string) {
+	c := DbConnection()
+	_, err := c.Exec(
+		"UPDATE notifications SET (status = $1) WHERE id = $2",
+		status,
+		notification.Id)
+
+	if err != nil {
+		log.Println("Error while trying to update a Notification record (", notification.Id, "): ", err)
+	}
+}
+
 // Checks that the device type is either
 func checkDeviceType(t string) bool {
 	if t == "IOS" || t == "ANDROID" || t == "WINDOWS" {
@@ -86,7 +126,7 @@ func checkToken(val string) bool {
 	return checkRegExp(val, exp)
 }
 
-func checkIOSToken(val string) bool {
+func checkUuidToken(val string) bool {
 	log.Println("Testing UUID: ", val)
 	exp := "^[a-zA-Z0-9]{64}$"
 	return checkRegExp(val, exp)
@@ -122,6 +162,36 @@ func createId() string {
 	return string(bytes)
 }
 
+// create the id's we are going to use for messages.
+func createUuid() string {
+	return uuid.New()
+}
+
+// Stores a notification in the database. We base 64 encode the message, not for security, but
+// to help protect against SQL injection. This way we are so restrictive on the outside data that
+// we store, it should be virtually impossible to perform a SQL injection attack.
+func createNotification(endpoint *Endpoint, message string, encrypted bool) (*Notification, error) {
+	message64 := encodeMessage(message)
+	c := DbConnection()
+
+	id := createUuid()
+
+	_, err := c.Exec(
+		"INSERT INTO notifications (id, endpoint_id, payload, status, enc, created_at) VALUES ($1,$2,$3,$4,$5,NOW())",
+		id,
+		endpoint.Id,
+		message64,
+		QUEUED,
+		encrypted)
+
+	if err != nil {
+		log.Println("Error while trying to create a Notification record: ", err)
+		return nil, errors.New("Failed to generate a notification for this message.")
+	}
+
+	return findNotification(id)
+}
+
 // Creates a new registration...
 func createEndpoint(deviceType string, deviceId string, deviceToken string) (*Endpoint, error) {
 	if !checkUUID(deviceId) {
@@ -133,7 +203,7 @@ func createEndpoint(deviceType string, deviceId string, deviceToken string) (*En
 	}
 
 	// Enforce IOS device type at the moment, as no other companion app is available.
-	if !checkIOSToken(deviceToken) {
+	if !checkUuidToken(deviceToken) {
 		return nil, errors.New("Invalid Device Token (IOS)")
 	}
 
@@ -143,7 +213,7 @@ func createEndpoint(deviceType string, deviceId string, deviceToken string) (*En
 
 	c := DbConnection()
 
-	row, err := c.Exec(
+	_, err := c.Exec(
 		"INSERT INTO endpoints (id, token, device_id, device_type, device_token, created_at) VALUES ($1,$2,$3,$4,$5,NOW())",
 		endpointId,
 		endpointToken,
@@ -156,13 +226,27 @@ func createEndpoint(deviceType string, deviceId string, deviceToken string) (*En
 		return &Endpoint{}, err
 	}
 
-	fmt.Println(row)
-
 	return &Endpoint{Id: endpointId,
 		Token:       endpointToken,
 		DeviceId:    deviceId,
 		DeviceType:  deviceType,
 		DeviceToken: deviceToken}, nil
+}
+
+// Simply base64 encode the messages, to avoid any SLQ injection issues.
+func encodeMessage(message string) string {
+	data := []byte(message)
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// Reverse base64 encoding.
+func decodeMessage(message string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(message)
+	if err != nil {
+		fmt.Println("error:", err)
+		return "", err
+	}
+	return string(data[:]), nil
 }
 
 // Enhanced security, this is the user we think it is, using the app we think
@@ -184,8 +268,16 @@ func RecordNotification(user Endpoint, payload string) bool {
 }
 
 // Generate an APNS message and send it to apple!
-func SendNotification(endpoint *Endpoint, message string) {
+func SendNotification(endpoint *Endpoint, notification *Notification) {
 	log.Println("Sending a message to APNS for endpoint ", endpoint.Id)
+
+  message, err := decodeMessage(notification.Payload)
+
+  if err != nil {
+  	log.Println("Failed to decode notification message: ",err)
+  	updateNotification(notification, ERROR)
+  	return
+  }
 
 	payload := apns.NewPayload()
 	payload.Alert = message
@@ -200,10 +292,44 @@ func SendNotification(endpoint *Endpoint, message string) {
 	resp := client.Send(pn)
 
 	alert, _ := pn.PayloadString()
-	log.Println("APNS: Alert:", alert)
-	log.Println("APNS: Success:", resp.Success)
-	log.Println("APNS: Error:", resp.Error)
 
+	status := QUEUED
+
+  if resp.Success {
+  	log.Println(notification.Id, " send OK.")
+  	status = SENT
+	} else {
+	  log.Println(notification.Id, " failed: ", alert, ", ", resp.Error)
+	  status = ERROR
+	}
+
+  updateNotification(notification, status)
+}
+
+func CheckNotification(w http.ResponseWriter, r *http.Request) {
+	log.Println("Received request to confirm a notification")
+
+	vars := mux.Vars(r)
+	id := vars["id"]
+	fof := fmt.Sprintf("{\"error\":\"Invalid notification.\",\"details\":\"Could not find requested notification.\"}")
+
+	if !checkUuidToken(id) {
+		log.Println("Invalid endpoint: ", id)
+		http.Error(w, fof, 401)
+		return		
+	}
+
+	notif, err := findNotification(id)
+
+	if err != nil {
+		log.Println("Notification could not be found: ", id)
+		http.Error(w, fof, 404)
+		return
+	}
+
+	// 201 and return the notifcation ID so it can be queried later 
+	w.WriteHeader(http.StatusCreated)
+	fmt.Fprintf(w, "{ \"status\": \"%v\" }", notif.Status)  
 }
 
 // Http handler for creates...
@@ -264,30 +390,34 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the alert, although we need to check the JSON or SQL injection...
-	// BASE64 Encode the message!!! Solves the problem, but recoverable.
+  notif, err := createNotification(endpoint, message, false)
+
+	if err != nil {
+		log.Println("Failed to create notification: ", err)
+		http.Error(w, fmt.Sprintf("{\"error\":\"Creating the notification failed.\",\"details\":\"%v\"}", err), 400)
+		return
+	}
 
 	// Identify the service we'll use to deliver the message
-	serviceId := "UNKNOWN"
 	if endpoint.DeviceType == "IOS" {
-		serviceId = "Apple Push Notification Service"
-
 		// This should be a GO Func.
-		SendNotification(endpoint, message)
-
-	} else if endpoint.DeviceType == "ANDROID" {
-		serviceId = "Not implemented!"
-	} else if endpoint.DeviceType == "WINDOWS" {
-		serviceId = "Not implemented!"
+		go func(endpoint *Endpoint, notif *Notification) { 
+			log.Println("Sending Notification to Apple: ", notif.Id)
+			SendNotification(endpoint, notif)
+		}(endpoint, notif)
+	// } else if endpoint.DeviceType == "ANDROID" {
+	// 	serviceId = "Not implemented!"
+	// } else if endpoint.DeviceType == "WINDOWS" {
+	// 	serviceId = "Not implemented!"
 	} else {
 		log.Println("Failed to find a device service match: '", endpoint.DeviceType, "'")
 		http.Error(w, "{\"error\":\"Could not identify device type.\",\"details\":\"Device type did not match a configured type.\"}", 400)
 		return
 	}
 
-	// 200 OK!
+	// 201 and return the notifcation ID so it can be queried later 
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "{ \"status\":\"OK\" \"details\": \"Message has been sent to %v.\" }", serviceId)
+	fmt.Fprintf(w, "{ \"status\":\"%v\" \"id\": \"%v.\" }", notif.Status, notif.Id)
 }
 
 // Http handler for creates...
@@ -356,15 +486,13 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 // Core Web stuff for routing.
 func webServer() {
 	log.Println("Building routes to listen on: ", *httpPort)
-
 	r := mux.NewRouter()
-
+  r.HandleFunc("/notification/{id}", CheckNotification).Methods("GET")
 	r.HandleFunc("/{id}", CreateTrigger).Methods("POST")
 	r.HandleFunc("/{id}", ShowTriggers).Methods("GET")
 	r.HandleFunc("/{id}", DeleteTrigger).Methods("DELETE")
 	r.HandleFunc("/{id}/recycle", RecycleToken).Methods("PATCH")
 	r.HandleFunc("/", RegisterDevice).Methods("POST")
-
 	http.Handle("/", r)
 	http.ListenAndServe(fmt.Sprintf(":%v", *httpPort), nil)
 }
