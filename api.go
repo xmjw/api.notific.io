@@ -539,15 +539,42 @@ func NotificationsForEndpoint(w http.ResponseWriter, r *http.Request) {
 	log.Println(len(*notifications), "notifications were found! Yahoo.")
 
 	// render notifications in JSON, needs something more substantial than previous.
-	jsonStr, err := gojson.Marshal(notifications)
+	jsonByte, err := gojson.Marshal(notifications)
 	if err != nil {
 		log.Println("Failed to render JSON: ", err)
 		http.Error(w, fof, 400)
 	}
 
 	// really need the JSON object, so we can loop through and decode the payload.
+	// this is totall pointless... must be a faster way...
+	jsonObj, err := simplejson.NewJson(jsonByte)
 
-	fmt.Fprintln(w, string(jsonStr))
+	if err != nil {
+		log.Println("Failed to do elastics on JSON: ", err)
+		http.Error(w, fof, 400)
+	}
+
+	for i, _ := range jsonObj.MustArray() {
+		payload := jsonObj.GetIndex(i).Get("Payload").MustString()
+		message, err := decodeMessage(payload)
+
+		if err != nil {
+			log.Println("Failed to do elastics on JSON: ", err)
+			http.Error(w, fof, 400)
+		}
+
+		jsonObj.GetIndex(i).Del("Payload")
+		jsonObj.GetIndex(i).Set("message", message)
+	}
+
+	newJsonByte, err := jsonObj.MarshalJSON()
+
+	if err != nil {
+		log.Println("Failed to do elastics on JSON: ", err)
+		http.Error(w, fof, 400)
+	}
+
+	fmt.Fprintln(w, string(newJsonByte))
 }
 
 // Http handler for creates...
