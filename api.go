@@ -299,7 +299,7 @@ func encodeMessage(message string) string {
 func decodeMessage(message string) (string, error) {
 	data, err := base64.StdEncoding.DecodeString(message)
 	if err != nil {
-		fmt.Println("error:", err)
+		log.Println("error:", err)
 		return "", err
 	}
 	return string(data[:]), nil
@@ -485,7 +485,8 @@ func NotificationsForEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	vars := mux.Vars(r)
 	id := vars["id"]
-	token := vars["token"]
+	token := r.Header.Get("token")
+
 	offsetStr := r.FormValue("offset")
 
 	offset := 0
@@ -620,13 +621,17 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	// Off in the background we'll report a new user using this software.
 	// How's that for dogfood?
 	go func(device_type string) {
-		log.Println("Using Notific.io to report new registration: ", device_type)
-		_, err := http.Post(fmt.Sprintf("http://api.io/"),
-			"application/json",
-			nil)
+    if notificEndpoint != "" {
+			log.Println("Using Notific.io to report new registration: ", device_type)
+			_, err := http.Post(fmt.Sprintf("http://api.io/"),
+				"application/json",
+				nil)
 
-		if err != nil {
-			log.Println("Failed to notify with io about a new user.")
+			if err != nil {
+				log.Println("Failed to notify with io about a new user.")
+			}
+		} else {
+			log.Println("No inbuilt notific token to dogfood a regisrtation with...")			
 		}
 	}(device_type)
 
@@ -641,7 +646,7 @@ func webServer() {
 	r := mux.NewRouter()
 	r.HandleFunc("/notification/{id}", CheckNotification).Methods("GET")
 	r.HandleFunc("/{id}", CreateTrigger).Methods("POST")
-	r.HandleFunc("/{id}/{token}", NotificationsForEndpoint).Methods("GET")
+	r.HandleFunc("/{id}", NotificationsForEndpoint).Methods("GET")
 	r.HandleFunc("/{id}", DeleteTrigger).Methods("DELETE")
 	r.HandleFunc("/{id}/recycle", RecycleToken).Methods("PATCH")
 	r.HandleFunc("/", RegisterDevice).Methods("POST")
