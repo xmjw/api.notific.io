@@ -621,7 +621,7 @@ func RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	// Off in the background we'll report a new user using this software.
 	// How's that for dogfood?
 	go func(device_type string) {
-    if notificEndpoint != "" {
+    if *notificEndpoint != "" {
 			log.Println("Using Notific.io to report new registration: ", device_type)
 			_, err := http.Post(fmt.Sprintf("http://api.io/"),
 				"application/json",
