@@ -10,5 +10,5 @@ import (
 func main() {
 	flag.Parse()
 	log.Println("Starting up api.io")
-	notific.WebServer()
+	notific.ApiServer()
 }

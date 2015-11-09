@@ -23,6 +23,7 @@ const SENT string = "SENT"
 const ERROR string = "ERROR"
 const REJECTED string = "REJECTED"
 
+
 // Stores a notification in the database. We base 64 encode the message, not for security, but
 // to help protect against SQL injection. This way we are so restrictive on the outside data that
 // we store, it should be virtually impossible to perform a SQL injection attack.
