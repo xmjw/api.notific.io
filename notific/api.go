@@ -97,7 +97,7 @@ func CreateTrigger(w http.ResponseWriter, r *http.Request) {
     return
   }
 
-  if validateRequest(token, endpoint) == false {
+  if !validateRequest(token, endpoint) {
     log.Println("Token was not valid against the endpoint: ", token)
     http.Error(w, fof, 401)
   }

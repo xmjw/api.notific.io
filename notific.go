@@ -2,13 +2,13 @@ package main
 
 import (
 	"flag"
-	"log"
 	"github.com/xmjw/api.notific.io/notific"
+	"log"
 )
 
 // Entry point.
 func main() {
 	flag.Parse()
-	log.Println("Starting up api.io")
-	notific.ApiServer()
+	log.Println("Starting up api.notific.io")
+	go notific.ApiServer()
 }
